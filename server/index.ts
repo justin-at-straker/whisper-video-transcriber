@@ -7,7 +7,6 @@ import OpenAI from "openai";
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path'; // Import path module
 import os from 'os'; // Import os module for temp directory
-import { jsonToSrt } from "./jsonToSrt";
 import { performance } from 'perf_hooks'; // Import performance for timing
 import logger from './logger'; // Import the logger
 
@@ -67,11 +66,12 @@ app.post("/api/transcribe", upload.single("file"), async (req: Request, res: Res
     let convertedAudioPath: string | undefined = undefined;
 
     try {
-        // --- 1. Convert with FFmpeg --- 
+        // --- 1. Convert with FFmpeg (to WAV 16kHz mono) --- 
         const ffmpegStartTime = performance.now();
-        const outputFilename = `${path.parse(originalFilename).name}_${Date.now()}.mp3`;
+        // Output WAV instead of MP3
+        const outputFilename = `${path.parse(originalFilename).name}_${Date.now()}.wav`; 
         convertedAudioPath = path.join(UPLOAD_DIR, outputFilename);
-        logger.info(`Starting conversion: ${originalFilePath} -> ${convertedAudioPath}`); // Use logger
+        logger.info(`Starting conversion to WAV: ${originalFilePath} -> ${convertedAudioPath}`);
 
         if (!convertedAudioPath) {
             throw new Error("Internal server error: Converted audio path not generated.");
@@ -80,22 +80,22 @@ app.post("/api/transcribe", upload.single("file"), async (req: Request, res: Res
 
         await new Promise<void>((resolve, reject) => {
             const command = ffmpeg(originalFilePath)
-                .noVideo().audioCodec('libmp3lame').audioBitrate('192k').format('mp3')
-                .output(finalConvertedPath)
-                .on('start', (commandLine) => logger.info('FFmpeg Spawned: ' + commandLine)) // Use logger
+                .noVideo() // Ensure no video
+                .audioFrequency(16000) // Set audio frequency to 16kHz
+                .audioChannels(1) // Set audio channels to 1 (mono)
+                .outputOption('-sample_fmt s16') // Specify sample format if needed, though often implied by wav
+                // Remove MP3 specific options: .audioCodec('libmp3lame').audioBitrate('192k').format('mp3')
+                .output(finalConvertedPath) // Output to WAV path
+                .on('start', (commandLine) => logger.info('FFmpeg Spawned: ' + commandLine))
                 .on('error', (err, stdout, stderr) => {
-                    logger.error('FFmpeg Error:', { // Use logger
-                         message: err.message, 
-                         stdout: stdout, 
-                         stderr: stderr 
-                    }); 
+                    logger.error('FFmpeg Error:', { message: err.message, stdout: stdout, stderr: stderr });
                     reject(new Error(`FFmpeg conversion failed: ${err.message}`));
                 })
                 .on('end', () => resolve());
             command.run();
         });
         const ffmpegEndTime = performance.now();
-        logger.info(`FFmpeg Conversion finished successfully in ${(ffmpegEndTime - ffmpegStartTime).toFixed(2)} ms.`); // Use logger
+        logger.info(`FFmpeg Conversion finished successfully in ${(ffmpegEndTime - ffmpegStartTime).toFixed(2)} ms.`);
 
         if (!fs.existsSync(finalConvertedPath)) {
              throw new Error("FFmpeg conversion finished but output file not found.");
@@ -103,34 +103,33 @@ app.post("/api/transcribe", upload.single("file"), async (req: Request, res: Res
         const stats = await fs.promises.stat(finalConvertedPath);
         logger.info(`Converted file size: ${(stats.size / (1024*1024)).toFixed(2)} MB`); // Use logger
 
-        // --- 2. Transcribe with OpenAI --- 
-        logger.info(`Attempting to transcribe converted file: ${finalConvertedPath} with model whisper-1`); // Use logger
+        // --- 2. Transcribe with OpenAI (Requesting SRT directly again) --- 
+        logger.info(`Attempting to transcribe converted file: ${finalConvertedPath} with model whisper-1 (requesting SRT)`);
         const openaiStartTime = performance.now();
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-        const tr = await openai.audio.transcriptions.create({
+        
+        // Request SRT format directly
+        const transcriptionResponse = await openai.audio.transcriptions.create({
             model: "whisper-1",
             file: fs.createReadStream(finalConvertedPath),
-            response_format: "verbose_json",
+            response_format: "srt", // <-- Request SRT
         });
         const openaiEndTime = performance.now();
-        logger.info(`OpenAI transcription successful in ${(openaiEndTime - openaiStartTime).toFixed(2)} ms.`); // Use logger
-        // logger.info("Raw OpenAI Response:", { response: tr }); // Use logger if needed
         
-        // --- 3. Convert to SRT --- 
-        logger.info("Converting transcription to SRT format..."); // Use logger
-        const srtStartTime = performance.now();
-        const srt = jsonToSrt(tr);
-        const srtEndTime = performance.now();
-        logger.info(`SRT conversion complete in ${(srtEndTime - srtStartTime).toFixed(2)} ms.`); // Use logger
+        // NOTE: transcriptionResponse for 'srt' format is expected to be the raw SRT string.
+        const srtContent = transcriptionResponse as string; 
+        logger.info("Raw OpenAI SRT Response:", srtContent); // Log the received SRT string
 
-        // --- 4. Send Response --- 
-        logger.info("Sending response..."); // Use logger
+        logger.info(`OpenAI transcription (SRT) successful in ${(openaiEndTime - openaiStartTime).toFixed(2)} ms.`);
+        
+        // --- 3. Send Response (No SRT conversion needed) --- 
+        logger.info("Sending response...");
         res
             .header("Content-Disposition", `attachment; filename="${path.parse(originalFilename).name}.srt"`)
-            .type("text/plain")
-            .send(srt);
-        const requestEndTime = performance.now(); // End overall request timing
-        logger.info(`SRT response sent. Total processing time: ${(requestEndTime - requestStartTime).toFixed(2)} ms.`); // Use logger
+            .type("text/plain") // SRT is plain text
+            .send(srtContent); // <-- Send the SRT content directly
+        const requestEndTime = performance.now(); 
+        logger.info(`SRT response sent. Total processing time: ${(requestEndTime - requestStartTime).toFixed(2)} ms.`);
 
     } catch (e) {
         const requestEndTime = performance.now();

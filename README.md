@@ -5,17 +5,16 @@ This is a Proof-of-Concept (POC) application demonstrating how to transcribe vid
 It uses:
 *   **Frontend:** Vite + React + TypeScript + Tailwind CSS + shadcn/ui
 *   **Backend:** Node.js + Express + TypeScript
-*   **Transcription:** OpenAI API (`whisper-1` model for `verbose_json` output)
-*   **Preprocessing:** FFmpeg (via `fluent-ffmpeg`) to extract audio and convert to MP3
+*   **Preprocessing:** FFmpeg (via `fluent-ffmpeg`) to extract audio and convert to 16kHz mono WAV.
+*   **Transcription:** OpenAI API (`whisper-1` model requesting `srt` format directly).
 *   **Logging:** Winston (logs to `/logs/server.log`)
 
 ## Features
 
 *   Upload audio or video files via a simple web interface.
-*   Backend preprocesses the file using FFmpeg to extract audio as MP3.
-*   Calls the OpenAI Whisper API (`whisper-1`) to transcribe the audio, requesting `verbose_json` format to get segment timestamps.
-*   Converts the timestamped segments from the API response into an SRT subtitle file format.
-*   Downloads the generated SRT file to the user's browser.
+*   Backend preprocesses the file using FFmpeg to extract audio as a 16kHz mono WAV file.
+*   Calls the OpenAI Whisper API (`whisper-1`) to transcribe the WAV audio, requesting the `srt` format directly.
+*   Downloads the generated SRT file (received directly from OpenAI) to the user's browser.
 
 ## Prerequisites
 
@@ -80,11 +79,12 @@ You need to run the frontend and backend servers concurrently in separate termin
     *   Select an audio or video file using the input field.
     *   Click the "Transcribe and Download SRT" button.
     *   Wait for the processing (FFmpeg conversion + OpenAI transcription).
-    *   An SRT file should automatically download once complete. Check the backend logs for detailed progress and timing.
+    *   An SRT file should automatically download once complete. Check the backend logs (`logs/server.log`) for detailed progress and timing.
 
 ## Notes
 
-*   The backend uses the OS's temporary directory (e.g., `/tmp` or `C:\Users\...\AppData\Local\Temp`) to store the initial upload and the converted MP3 file. These are cleaned up automatically.
-*   The `gpt-4o-transcribe` model was initially tested but found *not* to return segment timestamps needed for SRT generation in its `json` response format, hence the switch to `whisper-1` with `verbose_json`.
+*   The backend uses the OS's temporary directory (e.g., `/tmp` or `C:\Users\...\AppData\Local\Temp`) to store the initial upload and the converted WAV file. These are cleaned up automatically.
+*   The approach of requesting `verbose_json` and manually converting to SRT using `jsonToSrt.ts` was previously implemented but removed in favor of requesting `srt` directly from the API, which proved functional after initial tests.
+*   The `gpt-4o-transcribe` model was initially tested but found *not* to return segment timestamps needed for SRT generation in its `json` response format.
 *   Large file processing might take significant time depending on file size, server resources, and OpenAI API response time.
-*   The FFmpeg conversion is currently set to extract audio to MP3 at 192k bitrate. These settings can be adjusted in `server/index.ts`.
+*   The FFmpeg conversion is currently set to extract audio to 16kHz mono WAV. These settings can be adjusted in `server/index.ts`.
